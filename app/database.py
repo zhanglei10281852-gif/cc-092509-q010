@@ -335,6 +335,92 @@ CREATE TABLE IF NOT EXISTS dossier_events (
     occurred_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dossier_events_dossier ON dossier_events(dossier_id, id);
+
+CREATE TABLE IF NOT EXISTS patent_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    jurisdiction TEXT NOT NULL,
+    application_number TEXT NOT NULL,
+    family_id INTEGER,
+    dossier_id INTEGER REFERENCES dossiers(id),
+    title TEXT NOT NULL,
+    application_status TEXT NOT NULL CHECK(application_status IN ('draft','filed','published','granted','abandoned','merged')),
+    filing_date TEXT NOT NULL,
+    publication_date TEXT,
+    grant_date TEXT,
+    priority_claim_date TEXT,
+    secret_asset INTEGER NOT NULL DEFAULT 0 CHECK(secret_asset IN (0,1)),
+    merged_into_id INTEGER REFERENCES patent_applications(id),
+    import_fingerprint TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(jurisdiction, application_number)
+);
+CREATE INDEX IF NOT EXISTS idx_patent_apps_family ON patent_applications(family_id);
+
+CREATE TABLE IF NOT EXISTS patent_family_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    child_application_id INTEGER NOT NULL REFERENCES patent_applications(id),
+    parent_application_id INTEGER NOT NULL REFERENCES patent_applications(id),
+    relation_type TEXT NOT NULL CHECK(relation_type IN ('priority','continuation','divisional','continuation_in_part','national_phase')),
+    claimed_priority_date TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','superseded')),
+    superseded_by_link_id INTEGER REFERENCES patent_family_links(id),
+    change_request_id INTEGER REFERENCES patent_family_change_requests(id),
+    created_by INTEGER REFERENCES users(id),
+    revoke_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    revoked_at TEXT,
+    revoked_by INTEGER REFERENCES users(id),
+    CHECK(child_application_id <> parent_application_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_active_family_link_unique
+    ON patent_family_links(child_application_id, parent_application_id) WHERE status='active';
+CREATE INDEX IF NOT EXISTS idx_family_links_child ON patent_family_links(child_application_id);
+CREATE INDEX IF NOT EXISTS idx_family_links_parent ON patent_family_links(parent_application_id);
+
+CREATE TABLE IF NOT EXISTS patent_family_change_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    change_code TEXT NOT NULL UNIQUE,
+    change_type TEXT NOT NULL CHECK(change_type IN ('link_relation','merge_members','revoke_relation')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','executed','failed','cancelled')),
+    payload_json TEXT NOT NULL,
+    requested_by INTEGER NOT NULL REFERENCES users(id),
+    required_approvals INTEGER NOT NULL DEFAULT 2 CHECK(required_approvals >= 1),
+    idempotency_key TEXT,
+    execution_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT,
+    executed_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_family_change_idempotency
+    ON patent_family_change_requests(idempotency_key) WHERE idempotency_key IS NOT NULL AND status='pending';
+
+CREATE TABLE IF NOT EXISTS patent_family_change_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL REFERENCES patent_family_change_requests(id) ON DELETE CASCADE,
+    approver_user_id INTEGER NOT NULL REFERENCES users(id),
+    decision TEXT NOT NULL CHECK(decision IN ('approve','reject')),
+    comment TEXT NOT NULL DEFAULT '',
+    decided_at TEXT NOT NULL,
+    UNIQUE(request_id, approver_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS patent_family_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    family_id INTEGER,
+    application_id INTEGER REFERENCES patent_applications(id),
+    link_id INTEGER REFERENCES patent_family_links(id),
+    change_request_id INTEGER REFERENCES patent_family_change_requests(id),
+    event_type TEXT NOT NULL,
+    actor_user_id INTEGER REFERENCES users(id),
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_family_events_family ON patent_family_events(family_id, id);
+CREATE INDEX IF NOT EXISTS idx_family_events_app ON patent_family_events(application_id, id);
 """
 
 PERMISSIONS = [
@@ -353,6 +439,9 @@ PERMISSIONS = [
     ("approvals.decide", "审批高风险操作", "approvals", "decide"),
     ("vaults.read_sensitive", "查看精确密级库位", "vaults", "read_sensitive"),
     ("incidents.manage", "管理泄密事件", "incidents", "manage"),
+    ("patent_families.read", "查看专利家族", "patent_families", "read"),
+    ("patent_families.write", "维护专利家族成员", "patent_families", "write"),
+    ("patent_families.approve", "审批专利家族变更", "patent_families", "approve"),
 ]
 
 
@@ -432,10 +521,11 @@ def init_db() -> None:
             "dossier_manager": [
                 "dossiers.read", "dossiers.write", "dossiers.disclose", "dossiers.dispose",
                 "access_loans.manage", "inventory_review.manage", "incidents.manage",
+                "patent_families.read", "patent_families.write",
             ],
-            "researcher": ["dossiers.read", "dossiers.disclose"],
-            "approver": ["dossiers.read", "approvals.decide"],
-            "auditor": ["dossiers.read", "audit.read"],
+            "researcher": ["dossiers.read", "dossiers.disclose", "patent_families.read"],
+            "approver": ["dossiers.read", "approvals.decide", "patent_families.read", "patent_families.approve"],
+            "auditor": ["dossiers.read", "audit.read", "patent_families.read"],
         }
         for role_code, permission_codes in role_permissions.items():
             role_id = connection.execute("SELECT id FROM roles WHERE code=?", (role_code,)).fetchone()[0]

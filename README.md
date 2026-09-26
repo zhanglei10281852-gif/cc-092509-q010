@@ -14,6 +14,19 @@
 - 双人审批：合规处置、敏感库位解密等高风险操作要求申请人与审批人分离，并累计不同审批人的决定。
 - 泄密事件追踪：事件可以关联档案或移交批次，保存严重度、调查状态和处置结果。
 - 审计与任务：关键身份及业务操作留痕，后台任务支持去重、领取与完成。
+- 专利家族关系维护：同一技术在多国的申请、继续申请、分案与优先权主张统一建模；关系类型校验（继续/分案要求同辖区、在先申请日不得晚于在后申请、禁止循环）、优先权日期沿生效关系继承、合并前冲突预演、撤销后影响查询；所有关系变更经审核后才生效，重复导入保持原成员，家族汇总排除已撤销关系，重启后拓扑与审计顺序确定。
+
+## 专利家族接口
+
+- `POST /api/patent-families/applications`：登记申请（按申请号幂等，重复登记保持原家族成员关系）。
+- `POST /api/patent-families/import`：批量导入申请与关系提案，重复导入不产生重复成员或重复变更。
+- `POST /api/patent-families/changes`：提交 link/revoke/merge 变更，处于待审核状态。
+- `POST /api/patent-families/changes/{id}/decisions`：审核变更（申请人与审核人分离）。
+- `POST /api/patent-families/changes/{id}/apply`：审核通过后执行变更，生效前重新校验。
+- `POST /api/patent-families/merge/rehearse`：成员合并冲突预演（未生效变更、秘密资产与已公开申请混排、连接关系合法性）。
+- `GET /api/patent-families/relations/{id}/impact`：撤销影响查询，生效中关系给出预演、已撤销关系给出回溯。
+- `GET /api/patent-families/{id}/topology|summary|events`：确定序拓扑、排除已撤销关系的汇总、按主键排序的家族事件。
+- `GET /api/patent-families/applications/{id}/lineage`：解释一份申请与家族中其他申请的关系与优先权继承链。
 
 ## 运行环境
 
